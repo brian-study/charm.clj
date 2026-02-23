@@ -22,12 +22,13 @@
   [^Terminal terminal & {:keys [fps alt-screen hide-cursor]
                          :or {fps 60 alt-screen false hide-cursor true}}]
   (let [{:keys [width height]} (term/get-size terminal)
-        display (doto (Display. terminal false)
+        display (doto (Display. terminal (boolean alt-screen))
                   (.resize height width))]
     (atom {:terminal terminal
            :display display
            :fps fps
-           :alt-screen alt-screen
+           :alt-screen? alt-screen  ;; user preference (should we use alt-screen?)
+           :alt-screen false        ;; current state (are we in alt-screen now?)
            :hide-cursor hide-cursor
            :width width
            :height height
@@ -74,7 +75,6 @@
   (when-not (:alt-screen @renderer)
     (let [terminal (:terminal @renderer)]
       (term/enter-alt-screen terminal)
-      (term/clear-screen terminal)
       (term/cursor-home terminal))
     (swap! renderer assoc :alt-screen true)))
 
@@ -192,7 +192,6 @@
                            (AttributedString/fromAnsi
                             (scr/truncate-line line width)))
                          lines)]
-    ;; Display.update handles all the diffing internally.
     ;; Convert to ArrayList because JLine mutates the list internally
     ;; (e.g. calling .remove) and Clojure vectors are immutable.
     (.update display (java.util.ArrayList. attributed) -1)))
@@ -201,18 +200,26 @@
   "Force a full repaint on next render."
   [renderer]
   (let [^Display display (:display @renderer)]
-    (.clear display)))
+    (.reset display)))
 
 ;; ---------------------------------------------------------------------------
 ;; Size Updates
 ;; ---------------------------------------------------------------------------
 
 (defn update-size!
-  "Update the renderer's size (call on window resize)."
+  "Update the renderer's size (call on window resize).
+   Creates a fresh Display instance to avoid any stale internal state
+   (oldLines, cursorPos) from the previous dimensions. Also clears
+   the physical screen to remove stale content from pre-resize renders
+   that might have written with old dimensions. In alt-screen mode,
+   clear_screen does not create scrollback."
   [renderer width height]
-  (let [^Display display (:display @renderer)]
-    (.resize display height width)
-    (swap! renderer assoc :width width :height height)))
+  (let [{:keys [^Terminal terminal alt-screen?]} @renderer
+        new-display (doto (Display. terminal (boolean alt-screen?))
+                      (.resize height width))]
+    (term/clear-screen terminal)
+    (term/cursor-home terminal)
+    (swap! renderer assoc :display new-display :width width :height height)))
 
 (defn get-size
   "Get the current terminal size [width height]."
@@ -226,10 +233,10 @@
 (defn start!
   "Start the renderer."
   [renderer]
-  (let [{:keys [alt-screen hide-cursor]} @renderer]
+  (let [{:keys [alt-screen? hide-cursor]} @renderer]
     (when hide-cursor
       (hide-cursor! renderer))
-    (when alt-screen
+    (when alt-screen?
       (enter-alt-screen! renderer))
     (swap! renderer assoc :running true)))
 
