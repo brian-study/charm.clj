@@ -22,7 +22,7 @@
   [^Terminal terminal & {:keys [fps alt-screen hide-cursor]
                          :or {fps 60 alt-screen false hide-cursor true}}]
   (let [{:keys [width height]} (term/get-size terminal)
-        display (doto (Display. terminal false)
+        display (doto (Display. terminal (boolean alt-screen))
                   (.resize height width))]
     (atom {:terminal terminal
            :display display
@@ -202,18 +202,26 @@
   "Force a full repaint on next render."
   [renderer]
   (let [^Display display (:display @renderer)]
-    (.clear display)))
+    (.reset display)))
 
 ;; ---------------------------------------------------------------------------
 ;; Size Updates
 ;; ---------------------------------------------------------------------------
 
 (defn update-size!
-  "Update the renderer's size (call on window resize)."
+  "Update the renderer's size (call on window resize).
+   Creates a fresh Display instance to avoid stale internal state
+   (oldLines, cursorPos) from the previous dimensions, which would
+   permanently corrupt cursor tracking. Also clears the physical screen
+   to remove leftover content from pre-resize renders. In alt-screen
+   mode, clear-screen does not write to scrollback."
   [renderer width height]
-  (let [^Display display (:display @renderer)]
-    (.resize display height width)
-    (swap! renderer assoc :width width :height height)))
+  (let [{:keys [^Terminal terminal alt-screen]} @renderer
+        new-display (doto (Display. terminal (boolean alt-screen))
+                      (.resize height width))]
+    (term/clear-screen terminal)
+    (term/cursor-home terminal)
+    (swap! renderer assoc :display new-display :width width :height height)))
 
 (defn get-size
   "Get the current terminal size [width height]."
